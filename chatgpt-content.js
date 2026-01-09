@@ -2,46 +2,71 @@
 // Receives PDF data via storage and simulates a file drop
 
 // Track the tab ID this content script is associated with
+// Read from URL parameter set by sidepanel to avoid cross-tab contamination
 let currentTabId = null;
 
-// Listen for storage changes to get PDF data
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === 'local' && changes.pendingPDF?.newValue) {
-    const { pdfData, filename, tabId } = changes.pendingPDF.newValue;
-    console.log('[ChatGPT Sidebar] Received PDF via storage:', filename);
+// Initialize tab ID from URL parameter
+function initTabId() {
+  const url = new URL(window.location.href);
+  const tabIdParam = url.searchParams.get('__sidebarTabId');
+  if (tabIdParam) {
+    currentTabId = parseInt(tabIdParam, 10);
+    console.log('[ChatGPT Sidebar] Tab ID from URL param:', currentTabId);
 
-    // Save the tab ID for URL persistence
-    currentTabId = tabId;
+    // Check for any pending PDF for this specific tab
+    checkPendingPDF();
 
-    handlePDFDrop(pdfData, filename)
-      .then(() => {
-        // Clear the pending PDF
-        chrome.storage.local.remove('pendingPDF');
-        console.log('[ChatGPT Sidebar] PDF drop completed');
-      })
-      .catch((err) => {
-        console.error('[ChatGPT Sidebar] PDF drop failed:', err);
-      });
+    // Set up listener for this tab's PDF storage
+    setupPDFListener();
+
+    // Set up URL observer to track navigation
+    setupUrlObserver();
   }
-});
+}
 
-// Also check for pending PDF on load (in case storage was set before script loaded)
-chrome.storage.local.get('pendingPDF', (result) => {
-  if (result.pendingPDF) {
-    const { pdfData, filename, timestamp, tabId } = result.pendingPDF;
-    // Only process if recent (within last 10 seconds)
-    if (Date.now() - timestamp < 10000) {
-      console.log('[ChatGPT Sidebar] Found pending PDF on load:', filename);
-      currentTabId = tabId;
+// Listen for storage changes to get PDF data (only for this tab's key)
+function setupPDFListener() {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    const storageKey = `pendingPDF_${currentTabId}`;
+    if (areaName === 'local' && changes[storageKey]?.newValue) {
+      const { pdfData, filename } = changes[storageKey].newValue;
+      console.log('[ChatGPT Sidebar] Received PDF via storage:', filename);
+
       handlePDFDrop(pdfData, filename)
-        .then(() => chrome.storage.local.remove('pendingPDF'))
-        .catch((err) => console.error('[ChatGPT Sidebar] PDF drop failed:', err));
-    } else {
-      // Clear stale PDF
-      chrome.storage.local.remove('pendingPDF');
+        .then(() => {
+          // Clear the pending PDF for this tab
+          chrome.storage.local.remove(storageKey);
+          console.log('[ChatGPT Sidebar] PDF drop completed');
+        })
+        .catch((err) => {
+          console.error('[ChatGPT Sidebar] PDF drop failed:', err);
+        });
     }
-  }
-});
+  });
+}
+
+// Check for pending PDF on load (in case storage was set before script loaded)
+function checkPendingPDF() {
+  const storageKey = `pendingPDF_${currentTabId}`;
+  chrome.storage.local.get(storageKey, (result) => {
+    if (result[storageKey]) {
+      const { pdfData, filename, timestamp } = result[storageKey];
+      // Only process if recent (within last 10 seconds)
+      if (Date.now() - timestamp < 10000) {
+        console.log('[ChatGPT Sidebar] Found pending PDF on load:', filename);
+        handlePDFDrop(pdfData, filename)
+          .then(() => chrome.storage.local.remove(storageKey))
+          .catch((err) => console.error('[ChatGPT Sidebar] PDF drop failed:', err));
+      } else {
+        // Clear stale PDF
+        chrome.storage.local.remove(storageKey);
+      }
+    }
+  });
+}
+
+// Initialize on load
+initTabId();
 
 async function handlePDFDrop(base64Data, filename) {
   // Convert base64 to blob
@@ -112,45 +137,37 @@ function findDropTarget() {
 function saveCurrentUrl() {
   if (!currentTabId) return; // Don't save if we don't know which tab we're associated with
 
-  const url = window.location.href;
-  if (url && url.startsWith('https://chatgpt.com')) {
-    chrome.storage.local.set({ [`lastChatUrl_${currentTabId}`]: url });
+  // Remove the __sidebarTabId param before saving the URL
+  const url = new URL(window.location.href);
+  url.searchParams.delete('__sidebarTabId');
+  const cleanUrl = url.toString();
+
+  if (cleanUrl && cleanUrl.startsWith('https://chatgpt.com')) {
+    chrome.storage.local.set({ [`lastChatUrl_${currentTabId}`]: cleanUrl });
     // Notify sidepanel of current URL so it can open the right tab
-    chrome.runtime.sendMessage({ action: 'chatUrlChanged', url });
+    chrome.runtime.sendMessage({ action: 'chatUrlChanged', url: cleanUrl });
   }
 }
 
-// Get tab ID from storage on load (set by sidepanel)
-chrome.storage.local.get('currentSidepanelTabId', (result) => {
-  if (result.currentSidepanelTabId) {
-    currentTabId = result.currentSidepanelTabId;
-    console.log('[ChatGPT Sidebar] Using tab ID from sidepanel:', currentTabId);
-    // Save initial URL
-    saveCurrentUrl();
-  }
-});
-
-// Also listen for tab ID changes in storage
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === 'local' && changes.currentSidepanelTabId?.newValue) {
-    currentTabId = changes.currentSidepanelTabId.newValue;
-    console.log('[ChatGPT Sidebar] Updated tab ID:', currentTabId);
-    saveCurrentUrl();
-  }
-});
-
-// Watch for URL changes (pushState/popState)
+// Watch for URL changes (pushState/popState) - only if we have a tab ID
 let lastUrl = window.location.href;
-const urlObserver = new MutationObserver(() => {
-  if (window.location.href !== lastUrl) {
-    lastUrl = window.location.href;
-    saveCurrentUrl();
-  }
-});
-urlObserver.observe(document.body, { childList: true, subtree: true });
+function setupUrlObserver() {
+  if (!currentTabId) return;
 
-// Also listen for popstate
-window.addEventListener('popstate', saveCurrentUrl);
+  const urlObserver = new MutationObserver(() => {
+    if (window.location.href !== lastUrl) {
+      lastUrl = window.location.href;
+      saveCurrentUrl();
+    }
+  });
+  urlObserver.observe(document.body, { childList: true, subtree: true });
+
+  // Also listen for popstate
+  window.addEventListener('popstate', saveCurrentUrl);
+
+  // Save initial URL
+  saveCurrentUrl();
+}
 
 // --- Conversation Turn Detection ---
 // Detect when a user sends a message to ChatGPT

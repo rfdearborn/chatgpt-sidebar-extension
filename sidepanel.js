@@ -40,9 +40,10 @@ async function attachCurrentPage(isAuto = false) {
     if (!isAuto) showStatus('Generating PDF...');
 
     // Step 1: Generate PDF via background script
-    const pdfResponse = await chrome.runtime.sendMessage({ 
+    const pdfResponse = await chrome.runtime.sendMessage({
       action: 'printToPDF',
-      tabId: currentTabId 
+      tabId: currentTabId,
+      sidepanelTabId: currentTabId  // Pass sidepanel tab ID for debugger ref counting
     });
     if (pdfResponse.error) {
       if (!isAuto) showStatus('PDF error: ' + pdfResponse.error, true);
@@ -90,11 +91,12 @@ sharePageBtn.addEventListener('click', () => attachCurrentPage(false));
 // Open in new tab and close sidebar
 openExternalBtn.addEventListener('click', () => {
   chrome.tabs.create({ url: currentChatUrl });
-  
+
   // Cleanup debugger before closing
-  chrome.runtime.sendMessage({ 
-    action: 'detachDebugger', 
-    tabId: currentTabId 
+  chrome.runtime.sendMessage({
+    action: 'detachDebugger',
+    tabId: currentTabId,
+    sidepanelTabId: currentTabId
   });
   // Close the sidebar by disabling it for this tab
   chrome.sidePanel.setOptions({
@@ -106,7 +108,8 @@ openExternalBtn.addEventListener('click', () => {
 // Auto-attach toggle handling
 autoAttachCheckbox.addEventListener('change', () => {
   const isEnabled = autoAttachCheckbox.checked;
-  chrome.storage.local.set({ autoAttachEnabled: isEnabled });
+  // Use per-tab auto-attach setting to prevent affecting other tabs
+  chrome.storage.local.set({ [`autoAttachEnabled_${currentTabId}`]: isEnabled });
 
   if (isEnabled) {
     console.log('[ChatGPT Sidebar] Auto-attach enabled');
@@ -117,21 +120,24 @@ autoAttachCheckbox.addEventListener('change', () => {
     console.log('[ChatGPT Sidebar] Auto-attach disabled');
     stopPeriodicCheck();
     // Cleanup debugger if auto-attach is turned off
-    chrome.runtime.sendMessage({ 
-      action: 'detachDebugger', 
-      tabId: currentTabId 
+    chrome.runtime.sendMessage({
+      action: 'detachDebugger',
+      tabId: currentTabId,
+      sidepanelTabId: currentTabId
     });
   }
 });
 
-// Load saved auto-attach state
-chrome.storage.local.get('autoAttachEnabled', (result) => {
-  if (result.autoAttachEnabled) {
-    autoAttachCheckbox.checked = true;
-    startPeriodicCheck();
-    // No immediate attach here; let the iframe 'load' event handle it
-  }
-});
+// Load saved auto-attach state (will be loaded after we know currentTabId)
+function loadAutoAttachState() {
+  chrome.storage.local.get(`autoAttachEnabled_${currentTabId}`, (result) => {
+    if (result[`autoAttachEnabled_${currentTabId}`]) {
+      autoAttachCheckbox.checked = true;
+      startPeriodicCheck();
+      // No immediate attach here; let the iframe 'load' event handle it
+    }
+  });
+}
 
 function startPeriodicCheck() {
   stopPeriodicCheck();
@@ -169,14 +175,19 @@ async function loadUrlForTab(tabId) {
   frame.classList.add('loading');
   currentTabId = tabId;
 
-  // Store tab ID so content script knows which tab it's associated with
-  await chrome.storage.local.set({ currentSidepanelTabId: tabId });
-
   // Load per-tab URL
   const result = await chrome.storage.local.get(`lastChatUrl_${tabId}`);
   const lastUrl = result[`lastChatUrl_${tabId}`] || 'https://chatgpt.com/';
   currentChatUrl = lastUrl;
-  frame.src = lastUrl;
+
+  // Add tab ID to URL so content script knows which tab it belongs to
+  // This avoids using shared storage which causes cross-tab contamination
+  const url = new URL(lastUrl);
+  url.searchParams.set('__sidebarTabId', tabId);
+  frame.src = url.toString();
+
+  // Load per-tab auto-attach state
+  loadAutoAttachState();
 }
 
 // Initialize and load URL for current tab

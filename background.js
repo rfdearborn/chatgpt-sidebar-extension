@@ -2,8 +2,9 @@
 
 // Track which tabs have the sidebar open
 const openTabs = new Set();
-// Track which tabs have a debugger attached to avoid flickering
-const attachedTabs = new Set();
+// Track debugger attachment with reference counting to handle multiple sidepanels
+// Maps tabId -> Set of sidepanelTabIds that requested attachment
+const debuggerRefCounts = new Map();
 
 // Toggle panel on action click
 chrome.action.onClicked.addListener(async (tab) => {
@@ -14,8 +15,8 @@ chrome.action.onClicked.addListener(async (tab) => {
       enabled: false,
     });
     openTabs.delete(tab.id);
-    // Cleanup debugger if sidebar is closed
-    detachDebugger(tab.id);
+    // Cleanup debugger if sidebar is closed (use tab.id as both target and sidepanel)
+    detachDebugger(tab.id, tab.id);
   } else {
     // Open the sidebar
     chrome.sidePanel.setOptions({
@@ -37,19 +38,29 @@ chrome.action.onClicked.addListener(async (tab) => {
 // Clean up when tabs are closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   openTabs.delete(tabId);
-  attachedTabs.delete(tabId);
-  // Clean up stored URL for this tab
-  chrome.storage.local.remove(`lastChatUrl_${tabId}`);
+  // Clean up debugger refs for this tab (both as target and as sidepanel)
+  debuggerRefCounts.delete(tabId);
+  // Also remove this tab from any ref sets where it was a sidepanel
+  for (const [targetTabId, refs] of debuggerRefCounts.entries()) {
+    refs.delete(tabId);
+    if (refs.size === 0) {
+      debuggerRefCounts.delete(targetTabId);
+      // Detach debugger if no more references
+      chrome.debugger.detach({ tabId: targetTabId }).catch(() => {});
+    }
+  }
+  // Clean up stored URL and pending PDF for this tab
+  chrome.storage.local.remove([`lastChatUrl_${tabId}`, `pendingPDF_${tabId}`, `autoAttachEnabled_${tabId}`]);
 });
 
 // Listen for messages
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'printToPDF') {
-    handlePrintToPDF(request.tabId, sendResponse);
+    handlePrintToPDF(request.tabId, request.sidepanelTabId, sendResponse);
     return true;
   }
   if (request.action === 'detachDebugger') {
-    detachDebugger(request.tabId);
+    detachDebugger(request.tabId, request.sidepanelTabId);
     sendResponse({ success: true });
     return false;
   }
@@ -72,39 +83,58 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-// Helper to attach debugger if not already attached
-async function attachDebugger(tabId) {
-  if (attachedTabs.has(tabId)) return true;
-  
+// Helper to attach debugger with reference counting
+// sidepanelTabId tracks which sidepanel requested the attachment
+async function attachDebugger(tabId, sidepanelTabId) {
+  // Add reference
+  if (!debuggerRefCounts.has(tabId)) {
+    debuggerRefCounts.set(tabId, new Set());
+  }
+  const refs = debuggerRefCounts.get(tabId);
+  const wasEmpty = refs.size === 0;
+  refs.add(sidepanelTabId);
+
+  // Only actually attach if this is the first reference
+  if (!wasEmpty) return true;
+
   const debugTarget = { tabId };
   try {
     await chrome.debugger.attach(debugTarget, '1.3');
-    attachedTabs.add(tabId);
     return true;
   } catch (err) {
     if (err.message.includes('already attached')) {
-      attachedTabs.add(tabId);
       return true;
+    }
+    // Failed to attach, remove the reference we just added
+    refs.delete(sidepanelTabId);
+    if (refs.size === 0) {
+      debuggerRefCounts.delete(tabId);
     }
     throw err;
   }
 }
 
-// Helper to detach debugger
-async function detachDebugger(tabId) {
-  if (!attachedTabs.has(tabId)) return;
-  
+// Helper to detach debugger with reference counting
+async function detachDebugger(tabId, sidepanelTabId) {
+  if (!debuggerRefCounts.has(tabId)) return;
+
+  const refs = debuggerRefCounts.get(tabId);
+  refs.delete(sidepanelTabId);
+
+  // Only actually detach if no more references
+  if (refs.size > 0) return;
+
+  debuggerRefCounts.delete(tabId);
   const debugTarget = { tabId };
   try {
     await chrome.debugger.detach(debugTarget);
   } catch (err) {
     // Ignore errors if already detached
   }
-  attachedTabs.delete(tabId);
 }
 
 // Print page to PDF using debugger API
-async function handlePrintToPDF(targetTabId, sendResponse) {
+async function handlePrintToPDF(targetTabId, sidepanelTabId, sendResponse) {
   let debugTarget = null;
 
   try {
@@ -125,7 +155,7 @@ async function handlePrintToPDF(targetTabId, sendResponse) {
 
     // Attach debugger (persistently to avoid flickering)
     try {
-      await attachDebugger(tab.id);
+      await attachDebugger(tab.id, sidepanelTabId);
     } catch (attachErr) {
       // Provide helpful error for extension conflicts
       if (attachErr.message.includes('chrome-extension://')) {
@@ -167,22 +197,22 @@ async function handlePrintToPDF(targetTabId, sendResponse) {
   }
 }
 
-// Store PDF data for content script to pick up
+// Store PDF data for content script to pick up (per-tab to avoid cross-contamination)
 async function forwardDropPDF(request, sender, sendResponse) {
   try {
     let tabId = request.tabId;
-    
+
     if (!tabId) {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       tabId = tabs[0]?.id;
     }
 
+    // Use per-tab storage key to prevent PDFs from going to wrong tabs
     await chrome.storage.local.set({
-      pendingPDF: {
+      [`pendingPDF_${tabId}`]: {
         pdfData: request.pdfData,
         filename: request.filename,
-        timestamp: Date.now(),
-        tabId: tabId
+        timestamp: Date.now()
       }
     });
     sendResponse({ success: true });

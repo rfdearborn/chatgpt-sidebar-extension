@@ -115,6 +115,8 @@ function saveCurrentUrl() {
   const url = window.location.href;
   if (url && url.startsWith('https://chatgpt.com')) {
     chrome.storage.local.set({ [`lastChatUrl_${currentTabId}`]: url });
+    // Notify sidepanel of current URL so it can open the right tab
+    chrome.runtime.sendMessage({ action: 'chatUrlChanged', url });
   }
 }
 

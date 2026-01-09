@@ -3,12 +3,14 @@
 const frame = document.getElementById('chatgpt-frame');
 const sharePageBtn = document.getElementById('sharePage');
 const autoAttachCheckbox = document.getElementById('autoAttach');
+const openExternalBtn = document.getElementById('openExternal');
 const statusBar = document.getElementById('status-bar');
 const statusMessage = document.getElementById('status-message');
 const statusClose = document.getElementById('status-close');
 
 // Track state
 let currentTabId = null;
+let currentChatUrl = 'https://chatgpt.com/';
 let lastPageFingerprint = null;
 let autoAttachInterval = null;
 
@@ -87,15 +89,13 @@ sharePageBtn.addEventListener('click', () => attachCurrentPage(false));
 
 // Open in new tab and close sidebar
 openExternalBtn.addEventListener('click', () => {
-  const url = frame.src;
-  chrome.tabs.create({ url });
+  chrome.tabs.create({ url: currentChatUrl });
   
   // Cleanup debugger before closing
   chrome.runtime.sendMessage({ 
     action: 'detachDebugger', 
     tabId: currentTabId 
   });
-
   // Close the sidebar by disabling it for this tab
   chrome.sidePanel.setOptions({
     tabId: currentTabId,
@@ -174,11 +174,9 @@ async function loadUrlForTab(tabId) {
 
   // Load per-tab URL
   const result = await chrome.storage.local.get(`lastChatUrl_${tabId}`);
-  if (result[`lastChatUrl_${tabId}`]) {
-    frame.src = result[`lastChatUrl_${tabId}`];
-  } else {
-    frame.src = 'https://chatgpt.com/';
-  }
+  const lastUrl = result[`lastChatUrl_${tabId}`] || 'https://chatgpt.com/';
+  currentChatUrl = lastUrl;
+  frame.src = lastUrl;
 }
 
 // Initialize and load URL for current tab
@@ -199,6 +197,10 @@ async function initializeFrame() {
 chrome.runtime.onMessage.addListener((request) => {
   if (request.action === 'sidepanelOpened' && request.tabId !== currentTabId) {
     loadUrlForTab(request.tabId);
+  }
+
+  if (request.action === 'chatUrlChanged') {
+    currentChatUrl = request.url;
   }
 
   if (request.action === 'autoAttachTrigger') {

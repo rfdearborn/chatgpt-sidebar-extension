@@ -45,7 +45,6 @@ html, body {
   display: flex;
   align-items: center;
   padding: 2px 0;
-  margin-left: 0;
   border: none;
   border-radius: 4px;
   background: transparent;
@@ -71,6 +70,26 @@ html, body {
 
 #toolbar button span {
   line-height: 1;
+}
+
+#openExternal {
+  margin-left: auto;
+  padding: 4px;
+  color: #555;
+  text-decoration: none !important;
+  opacity: 0.8;
+  transition: opacity 0.15s, color 0.15s;
+  border-radius: 4px;
+}
+
+#openExternal:hover {
+  color: #aaa;
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#openExternal svg {
+  display: block;
 }
 
 .toggle-container {

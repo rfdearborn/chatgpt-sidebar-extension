@@ -2,6 +2,8 @@
 
 // Track which tabs have the sidebar open
 const openTabs = new Set();
+// Track which tabs have a debugger attached to avoid flickering
+const attachedTabs = new Set();
 
 // Toggle panel on action click
 chrome.action.onClicked.addListener(async (tab) => {
@@ -12,6 +14,8 @@ chrome.action.onClicked.addListener(async (tab) => {
       enabled: false,
     });
     openTabs.delete(tab.id);
+    // Cleanup debugger if sidebar is closed
+    detachDebugger(tab.id);
   } else {
     // Open the sidebar
     chrome.sidePanel.setOptions({
@@ -33,72 +37,95 @@ chrome.action.onClicked.addListener(async (tab) => {
 // Clean up when tabs are closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   openTabs.delete(tabId);
+  attachedTabs.delete(tabId);
   // Clean up stored URL for this tab
   chrome.storage.local.remove(`lastChatUrl_${tabId}`);
 });
 
-// Handle messages from sidepanel
+// Listen for messages
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'printToPDF') {
-    handlePrintToPDF(sendResponse);
+    handlePrintToPDF(request.tabId, sendResponse);
     return true;
   }
+  if (request.action === 'detachDebugger') {
+    detachDebugger(request.tabId);
+    sendResponse({ success: true });
+    return false;
+  }
   if (request.action === 'dropPDF') {
-    forwardDropPDF(request, sendResponse);
+    forwardDropPDF(request, sender, sendResponse);
     return true;
   }
   if (request.action === 'getTabId') {
-    return handleGetTabId(sendResponse);
+    handleGetTabId(sender, sendResponse);
+    return true;
+  }
+  if (request.action === 'conversationTurnDetected') {
+    // Forward back to the sidepanel that sent it
+    chrome.runtime.sendMessage({ 
+      action: 'autoAttachTrigger', 
+      reason: 'turn',
+      sourceTabId: request.tabId
+    });
+    return false;
   }
 });
 
-// Store PDF data for content script to pick up
-async function forwardDropPDF(request, sendResponse) {
+// Helper to attach debugger if not already attached
+async function attachDebugger(tabId) {
+  if (attachedTabs.has(tabId)) return true;
+  
+  const debugTarget = { tabId };
   try {
-    // Get the active tab to associate this PDF with
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const tabId = tabs[0]?.id;
-
-    await chrome.storage.local.set({
-      pendingPDF: {
-        pdfData: request.pdfData,
-        filename: request.filename,
-        timestamp: Date.now(),
-        tabId: tabId
-      }
-    });
-    sendResponse({ success: true });
+    await chrome.debugger.attach(debugTarget, '1.3');
+    attachedTabs.add(tabId);
+    return true;
   } catch (err) {
-    sendResponse({ error: err.message });
+    if (err.message.includes('already attached')) {
+      attachedTabs.add(tabId);
+      return true;
+    }
+    throw err;
   }
 }
 
-// Handle request for current tab ID from sidepanel
-function handleGetTabId(sendResponse) {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    sendResponse({ tabId: tabs[0]?.id });
-  });
-  return true;
+// Helper to detach debugger
+async function detachDebugger(tabId) {
+  if (!attachedTabs.has(tabId)) return;
+  
+  const debugTarget = { tabId };
+  try {
+    await chrome.debugger.detach(debugTarget);
+  } catch (err) {
+    // Ignore errors if already detached
+  }
+  attachedTabs.delete(tabId);
 }
 
 // Print page to PDF using debugger API
-async function handlePrintToPDF(sendResponse) {
+async function handlePrintToPDF(targetTabId, sendResponse) {
   let debugTarget = null;
 
   try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const tab = tabs.find(t => t.url && (t.url.startsWith('http://') || t.url.startsWith('https://')));
+    let tab;
+    if (targetTabId) {
+      tab = await chrome.tabs.get(targetTabId);
+    } else {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      tab = tabs.find(t => t.url && (t.url.startsWith('http://') || t.url.startsWith('https://')));
+    }
 
     if (!tab) {
-      sendResponse({ error: 'No web page tab found' });
+      sendResponse({ error: 'Target page not found' });
       return;
     }
 
     debugTarget = { tabId: tab.id };
 
-    // Attach debugger
+    // Attach debugger (persistently to avoid flickering)
     try {
-      await chrome.debugger.attach(debugTarget, '1.3');
+      await attachDebugger(tab.id);
     } catch (attachErr) {
       // Provide helpful error for extension conflicts
       if (attachErr.message.includes('chrome-extension://')) {
@@ -116,8 +143,11 @@ async function handlePrintToPDF(sendResponse) {
       preferCSSPageSize: true,
     });
 
-    // Detach debugger
-    await chrome.debugger.detach(debugTarget);
+    // Get page text for a more stable diffing fingerprint
+    const evalResult = await chrome.debugger.sendCommand(debugTarget, 'Runtime.evaluate', {
+      expression: 'document.body.innerText'
+    });
+    const pageText = evalResult.result?.value || '';
 
     // Generate filename from page title
     const sanitizedTitle = tab.title
@@ -127,18 +157,44 @@ async function handlePrintToPDF(sendResponse) {
 
     sendResponse({
       pdfData: result.data,
+      pageText: pageText,
       filename: filename,
       title: tab.title,
       url: tab.url,
     });
   } catch (err) {
-    if (debugTarget) {
-      try {
-        await chrome.debugger.detach(debugTarget);
-      } catch (e) {
-        // Ignore detach errors
-      }
-    }
     sendResponse({ error: err.message });
   }
+}
+
+// Store PDF data for content script to pick up
+async function forwardDropPDF(request, sender, sendResponse) {
+  try {
+    let tabId = request.tabId;
+    
+    if (!tabId) {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      tabId = tabs[0]?.id;
+    }
+
+    await chrome.storage.local.set({
+      pendingPDF: {
+        pdfData: request.pdfData,
+        filename: request.filename,
+        timestamp: Date.now(),
+        tabId: tabId
+      }
+    });
+    sendResponse({ success: true });
+  } catch (err) {
+    sendResponse({ error: err.message });
+  }
+}
+
+// Handle request for current tab ID from sidepanel
+function handleGetTabId(sender, sendResponse) {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    sendResponse({ tabId: tabs[0]?.id });
+  });
+  return true;
 }

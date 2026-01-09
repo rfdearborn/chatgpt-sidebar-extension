@@ -150,4 +150,52 @@ urlObserver.observe(document.body, { childList: true, subtree: true });
 // Also listen for popstate
 window.addEventListener('popstate', saveCurrentUrl);
 
+// --- Conversation Turn Detection ---
+// Detect when a user sends a message to ChatGPT
+function setupTurnDetection() {
+  console.log('[ChatGPT Sidebar] Setting up turn detection...');
+
+  // 1. Listen for clicks on the send button
+  document.addEventListener('click', (e) => {
+    const sendButton = e.target.closest('[data-testid="send-button"]') ||
+                       e.target.closest('button[aria-label="Send prompt"]');
+    if (sendButton) {
+      console.log('[ChatGPT Sidebar] Send button clicked');
+      notifyTurn();
+    }
+  }, true);
+
+  // 2. Listen for Enter key in the textarea
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      const textarea = e.target.closest('#prompt-textarea');
+      if (textarea) {
+        console.log('[ChatGPT Sidebar] Enter pressed in textarea');
+        notifyTurn();
+      }
+    }
+  }, true);
+}
+
+let lastNotifyTime = 0;
+function notifyTurn() {
+  // Throttle notifications to once per 2 seconds
+  const now = Date.now();
+  if (now - lastNotifyTime < 2000) return;
+  lastNotifyTime = now;
+
+  console.log('[ChatGPT Sidebar] Notifying turn detected');
+  chrome.runtime.sendMessage({ 
+    action: 'conversationTurnDetected',
+    tabId: currentTabId 
+  });
+}
+
+// Initialize turn detection
+if (document.readyState === 'complete' || document.readyState === 'interactive') {
+  setupTurnDetection();
+} else {
+  window.addEventListener('DOMContentLoaded', setupTurnDetection);
+}
+
 console.log('[ChatGPT Sidebar] Content script loaded on chatgpt.com');

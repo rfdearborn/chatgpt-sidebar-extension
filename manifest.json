@@ -52,8 +52,8 @@
   "commands": {
     "_execute_action": {
       "suggested_key": {
-        "default": "Ctrl+Shift+G",
-        "mac": "Command+Shift+G"
+        "default": "Alt+C",
+        "mac": "Alt+C"
       },
       "description": "Toggle ChatGPT Sidebar"
     }

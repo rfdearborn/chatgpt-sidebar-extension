@@ -1,14 +1,15 @@
 # ChatGPT Sidebar
 
-A simple, trustworthy Chrome extension that provides quick access to ChatGPT in a sidebar with page context features. Unlike third-party wrappers, this extension embeds the actual chatgpt.com site, so all conversations sync to your real ChatGPT account and appear in your conversation history across devices.
+![ChatGPT Sidebar Screenshot](chatgpt_sidebar.png)
+
+A simple Chrome extension that provides quick access to ChatGPT in a sidebar with automatic page context sharing.
 
 ## Features
 
-- **Real ChatGPT**: Uses the actual chatgpt.com in an iframe - your conversations sync everywhere
-- **Page Context**: Extract full page content and send it to ChatGPT
-- **Selection Support**: Send just the selected text to ChatGPT
-- **Keyboard Shortcuts**: Quick access via Cmd+Shift+G (toggle sidebar) and Cmd+Shift+E (extract page)
-- **Minimal Permissions**: Only requests what's necessary
+- **Real ChatGPT**: Uses the actual chatgpt.com in an iframe, not GPT via API - your conversations sync everywhere.
+- **Auto-Share Page**: Automatically attaches the current page context as a PDF every 10 seconds or whenever you send a message (toggle "Auto" to enable or click "Now" to force an immediate attachment).
+- **Pop-out Support**: Quickly open your current chat in a full tab and close the sidebar with one click.
+- **Keyboard Shortcuts**: Quick access via Option+C (toggle sidebar).
 
 ## Installation
 
@@ -20,46 +21,28 @@ A simple, trustworthy Chrome extension that provides quick access to ChatGPT in 
 
 ## Usage
 
-1. **Open Sidebar**: Click the extension icon or press `Cmd+Shift+G`
-2. **Log in**: Sign into your ChatGPT account in the sidebar (first time only)
-3. **Read Page**: Click "Read Page" to extract the current page's content - it will be copied to your clipboard
-4. **Selection**: Select text on a page, then click "Selection" to copy it with context
-5. **New Chat**: Start a fresh conversation
-6. **Paste**: Press `Cmd+V` in the ChatGPT input to paste the extracted content
+1. **Open Sidebar**: Click the extension icon or press `Option+C`.
+2. **Log in**: Sign into your ChatGPT account in the sidebar (first time only).
+3. **Share page**:
+    - **Auto**: Toggle the "Auto" switch on. The extension will now silently keep your page context updated in the ChatGPT composer.
+    - **Now**: Click "Now" to immediately print the current tab to PDF and drop it into the chat.
+4. **Pop-out**: Click the diagonal arrow icon in the top right to continue your chat in a full browser tab.
 
 ## How It Works
 
-The extension opens chatgpt.com in Chrome's built-in Side Panel. When you click "Read Page" or "Selection", it extracts the content from the current tab and copies it to your clipboard with formatting. You then paste it into the ChatGPT input.
-
-This approach is necessary because cross-origin iframe restrictions prevent directly injecting text into the ChatGPT input. The tradeoff is one extra paste step, but the benefit is that your conversations are 100% native ChatGPT conversations that sync to your account.
+The extension uses the Chrome `debugger` API to generate a high-fidelity PDF of your active tab. It then simulates a "file drop" directly into the ChatGPT composer. This bypasses clipboard workflows and cross-origin restrictions while ensuring ChatGPT has the full, rendered context of the page you are viewing.
 
 ## Permissions Explained
 
-- `activeTab`: Read content from the current tab when you click extract
-- `sidePanel`: Display ChatGPT in Chrome's side panel
-- `storage`: Store preferences locally
-- `scripting`: Extract page content
-- `host_permissions (chatgpt.com)`: Load ChatGPT in the sidebar iframe
+- `sidePanel`: Display ChatGPT in Chrome's built-in Side Panel.
+- `debugger`: Required to generate a PDF of the page and extract text for stable diffing.
+- `tabs`: Associate the sidebar with specific browser tabs and handle navigation.
+- `storage`: Store your "Auto-Share" preference and chat URLs per tab.
+- `declarativeNetRequest`: Used to handle iframe headers for chatgpt.com.
 
 ## Privacy
 
-- No data is sent to any third-party servers
-- All conversations happen directly with OpenAI through your ChatGPT account
-- Page content is only extracted when you explicitly click the button
-- Nothing is stored except local preferences
-
-## Limitations
-
-- Requires pasting content (clipboard workflow) due to iframe security restrictions
-- ChatGPT must be logged in within the sidebar
-- Some pages may block content extraction
-
-## Troubleshooting
-
-**Sidebar won't open**: Make sure you've enabled the extension and granted permissions
-
-**Can't paste content**: Check that clipboard permissions are enabled for the extension
-
-**ChatGPT not loading**: Try clicking the refresh button in the toolbar
-
-**"Read Page" not working**: Some pages (like chrome:// pages or PDFs) restrict content access
+- No data is ever sent to third-party servers beyond whatever's going to/through ChatGPT.
+- Page context is only "shared" with ChatGPT when you have "Auto" enabled or click "Now"
+- The `debugger` connection is only active while the sidebar is open or "Auto" is enabled.
+- All conversations happen directly with OpenAI through your native ChatGPT account.

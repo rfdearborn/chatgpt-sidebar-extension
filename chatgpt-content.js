@@ -145,7 +145,11 @@ function saveCurrentUrl() {
   if (cleanUrl && cleanUrl.startsWith('https://chatgpt.com')) {
     chrome.storage.local.set({ [`lastChatUrl_${currentTabId}`]: cleanUrl });
     // Notify sidepanel of current URL so it can open the right tab
-    chrome.runtime.sendMessage({ action: 'chatUrlChanged', url: cleanUrl });
+    chrome.runtime.sendMessage({ 
+      action: 'chatUrlChanged', 
+      url: cleanUrl,
+      tabId: currentTabId 
+    });
   }
 }
 
@@ -218,3 +222,16 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
 }
 
 console.log('[ChatGPT Sidebar] Content script loaded on chatgpt.com');
+
+// Export for testing
+if (typeof module !== 'undefined') {
+  module.exports = {
+    handlePDFDrop,
+    findDropTarget,
+    notifyTurn,
+    // Expose for test manipulation
+    setCurrentTabId: (id) => { currentTabId = id; },
+    getLastNotifyTime: () => lastNotifyTime,
+    setLastNotifyTime: (time) => { lastNotifyTime = time; }
+  };
+}

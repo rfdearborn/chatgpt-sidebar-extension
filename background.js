@@ -21,17 +21,11 @@ chrome.action.onClicked.addListener(async (tab) => {
     // Open the sidebar
     chrome.sidePanel.setOptions({
       tabId: tab.id,
-      path: 'sidepanel.html',
+      path: `sidepanel.html?tabId=${tab.id}`,
       enabled: true,
     });
     chrome.sidePanel.open({ tabId: tab.id });
     openTabs.add(tab.id);
-
-    // Notify sidepanel which tab it's being opened for
-    // Small delay to ensure sidepanel is loaded
-    setTimeout(() => {
-      chrome.runtime.sendMessage({ action: 'sidepanelOpened', tabId: tab.id });
-    }, 100);
   }
 });
 
@@ -82,6 +76,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
   }
 });
+
+// Export for testing
+if (typeof module !== 'undefined') {
+  module.exports = {
+    attachDebugger,
+    detachDebugger,
+    handlePrintToPDF,
+    sanitizeFilename,
+    forwardDropPDF,
+    handleGetTabId,
+    debuggerRefCounts,
+    openTabs
+  };
+}
 
 // Helper to attach debugger with reference counting
 // sidepanelTabId tracks which sidepanel requested the attachment
@@ -180,10 +188,7 @@ async function handlePrintToPDF(targetTabId, sidepanelTabId, sendResponse) {
     const pageText = evalResult.result?.value || '';
 
     // Generate filename from page title
-    const sanitizedTitle = tab.title
-      .replace(/[^a-z0-9]/gi, '_')
-      .substring(0, 50);
-    const filename = `${sanitizedTitle}.pdf`;
+    const filename = sanitizeFilename(tab.title);
 
     sendResponse({
       pdfData: result.data,
@@ -219,6 +224,15 @@ async function forwardDropPDF(request, sender, sendResponse) {
   } catch (err) {
     sendResponse({ error: err.message });
   }
+}
+
+// Helper to sanitize page title for filename
+function sanitizeFilename(title) {
+  const sanitized = title
+    .replace(/[^a-z0-9]/gi, '_')
+    .substring(0, 50);
+  // Fallback to 'page' if title is empty or only had special characters
+  return (sanitized.replace(/_/g, '') ? sanitized : 'page') + '.pdf';
 }
 
 // Handle request for current tab ID from sidepanel

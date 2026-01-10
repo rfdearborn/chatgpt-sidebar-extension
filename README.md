@@ -46,3 +46,26 @@ The extension uses the Chrome `debugger` API to generate a high-fidelity PDF of 
 - Page context is only "shared" with ChatGPT when you have "Auto" enabled or click "Now"
 - The `debugger` connection is only active while the sidebar is open or "Auto" is enabled.
 - All conversations happen directly with OpenAI through your native ChatGPT account.
+
+## Development & Testing
+
+This project uses [Vitest](https://vitest.dev/) for testing and [jest-chrome](https://github.com/samuprolo/jest-chrome) for mocking Chrome extension APIs.
+
+### Setup
+
+```bash
+npm install
+```
+
+### Running Tests
+
+```bash
+# Run tests once
+npm test
+
+# Run tests in watch mode
+npx vitest
+
+# Generate coverage report
+npm run coverage
+```

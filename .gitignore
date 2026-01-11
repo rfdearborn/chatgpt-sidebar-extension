@@ -4,3 +4,8 @@ _metadata/
 node_modules/
 coverage/
 .vitest-result/
+tests/e2e/.user-data/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

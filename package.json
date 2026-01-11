@@ -5,12 +5,14 @@
   "main": "background.js",
   "scripts": {
     "test": "vitest",
+    "test:e2e": "playwright test",
     "coverage": "vitest run --coverage"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "@vitest/coverage-v8": "^4.0.16",
     "happy-dom": "^20.1.0",
     "jest-chrome": "^0.8.0",

@@ -60,8 +60,11 @@ npm install
 ### Running Tests
 
 ```bash
-# Run tests once
+# Run unit and integration tests (Vitest)
 npm test
+
+# Run E2E tests (Playwright)
+npm run test:e2e
 
 # Run tests in watch mode
 npx vitest

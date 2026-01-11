@@ -175,23 +175,153 @@ async function handlePrintToPDF(targetTabId, sidepanelTabId, sendResponse) {
       throw attachErr;
     }
 
-    // Print to PDF
-    const result = await chrome.debugger.sendCommand(debugTarget, 'Page.printToPDF', {
-      printBackground: true,
-      preferCSSPageSize: true,
-    });
+    let pdfData;
+    let pageText;
+    let usedTab = tab;
+    let tempTabId = null;
 
-    // Get page text for a more stable diffing fingerprint
-    const evalResult = await chrome.debugger.sendCommand(debugTarget, 'Runtime.evaluate', {
-      expression: 'document.body.innerText'
-    });
-    const pageText = evalResult.result?.value || '';
+    // Special handling for Gmail to get "Print all" view
+    if (tab.url.includes('mail.google.com')) {
+      try {
+        const evalResult = await chrome.debugger.sendCommand(debugTarget, 'Runtime.evaluate', {
+          expression: `(() => {
+            const getThreadId = () => {
+              // 1. Check for the specific attribute Gmail uses for thread ID
+              const el = document.querySelector('[data-legacy-thread-id]');
+              if (el) return el.getAttribute('data-legacy-thread-id');
+              
+              // 2. Fallback to parsing the URL hash for a 16-char hex string
+              const hash = window.location.hash;
+              const hexMatch = hash.match(/[#\/]([0-9a-f]{16})/i);
+              if (hexMatch) return hexMatch[1];
+
+              return null;
+            };
+
+            const ik = window._ik || (window.GLOBALS && window.GLOBALS[9]);
+            const th = getThreadId();
+            
+            if (ik && th) {
+              const url = new URL(window.location.href);
+              // Preserve the specific user session (e.g., /mail/u/1/)
+              const sessionMatch = url.pathname.match(/\\/mail\\/u\\/\\d+\\//);
+              const basePath = sessionMatch ? sessionMatch[0] : '/mail/u/0/';
+              return \`\${url.origin}\${basePath}?ui=2&ik=\${ik}&view=pt&search=all&th=\${th}\`;
+            }
+            return null;
+          })()`,
+          returnByValue: true
+        });
+
+        const printUrl = evalResult.result?.value;
+        if (printUrl) {
+          // 1. Create a blank tab first so we can attach debugger and block print dialog
+          const tempTab = await chrome.tabs.create({ url: 'about:blank', active: false });
+          tempTabId = tempTab.id;
+          const tempDebugTarget = { tabId: tempTabId };
+
+          await chrome.debugger.attach(tempDebugTarget, '1.3');
+          await chrome.debugger.sendCommand(tempDebugTarget, 'Page.enable');
+          
+          // 2. CRITICAL: Block window.print() before it can open a modal dialog that hangs the tab
+          // This script runs before any other script on the new page
+          await chrome.debugger.sendCommand(tempDebugTarget, 'Page.addScriptToEvaluateOnNewDocument', {
+            source: 'window.print = () => { console.log("[ChatGPT Sidebar] Print dialog blocked"); };'
+          });
+
+          // 3. Now navigate to the actual Gmail print URL
+          await chrome.tabs.update(tempTabId, { url: printUrl });
+
+          // Wait for tab to load with timeout
+          await Promise.race([
+            new Promise((resolve) => {
+              const listener = (tabId, info) => {
+                if (tabId === tempTabId && info.status === 'complete') {
+                  chrome.tabs.onUpdated.removeListener(listener);
+                  resolve();
+                }
+              };
+              chrome.tabs.onUpdated.addListener(listener);
+              
+              // Also check if it's already complete
+              chrome.tabs.get(tempTabId, (tab) => {
+                if (tab && tab.status === 'complete') {
+                  chrome.tabs.onUpdated.removeListener(listener);
+                  resolve();
+                }
+              });
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout waiting for Gmail print view')), 15000))
+          ]);
+
+          // Ensure Runtime is enabled for the content check
+          await chrome.debugger.sendCommand(tempDebugTarget, 'Runtime.enable');
+
+          // CRITICAL: Wait for the actual email content to render in the print view
+          await chrome.debugger.sendCommand(tempDebugTarget, 'Runtime.evaluate', {
+            expression: `new Promise(resolve => {
+              const check = () => {
+                const hasTable = !!document.querySelector('table');
+                const hasContent = document.body.innerText.length > 300;
+                const isDeleted = document.body.innerText.includes('deleted') || document.body.innerText.includes('not available');
+                
+                if ((hasTable && hasContent) || isDeleted) {
+                  resolve(true);
+                } else {
+                  setTimeout(check, 100);
+                }
+              };
+              check();
+              setTimeout(() => resolve(false), 8000); // 8s max wait for content
+            })`,
+            awaitPromise: true
+          });
+          
+          const result = await chrome.debugger.sendCommand(tempDebugTarget, 'Page.printToPDF', {
+            printBackground: true,
+            preferCSSPageSize: true,
+            displayHeaderFooter: false,
+            generateDocumentOutline: true
+          });
+          pdfData = result.data;
+
+          const textResult = await chrome.debugger.sendCommand(tempDebugTarget, 'Runtime.evaluate', {
+            expression: 'document.body.innerText'
+          });
+          pageText = textResult.result?.value || '';
+
+          await chrome.debugger.detach(tempDebugTarget);
+          await chrome.tabs.remove(tempTabId);
+          tempTabId = null;
+        }
+      } catch (gmailErr) {
+        console.error('Failed to get Gmail print view, falling back to normal print:', gmailErr);
+        if (tempTabId) {
+          chrome.tabs.remove(tempTabId).catch(() => {});
+        }
+      }
+    }
+
+    if (!pdfData) {
+      // Print to PDF (standard fallback)
+      const result = await chrome.debugger.sendCommand(debugTarget, 'Page.printToPDF', {
+        printBackground: true,
+        preferCSSPageSize: true,
+      });
+      pdfData = result.data;
+
+      // Get page text for a more stable diffing fingerprint
+      const evalResult = await chrome.debugger.sendCommand(debugTarget, 'Runtime.evaluate', {
+        expression: 'document.body.innerText'
+      });
+      pageText = evalResult.result?.value || '';
+    }
 
     // Generate filename from page title
     const filename = sanitizeFilename(tab.title);
 
     sendResponse({
-      pdfData: result.data,
+      pdfData: pdfData,
       pageText: pageText,
       filename: filename,
       title: tab.title,

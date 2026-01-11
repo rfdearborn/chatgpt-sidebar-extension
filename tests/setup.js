@@ -11,6 +11,6 @@ Object.assign(global, { chrome, jest: vi });
 if (!chrome.action) chrome.action = { onClicked: { addListener: vi.fn() } };
 if (!chrome.sidePanel) chrome.sidePanel = { setOptions: vi.fn(), open: vi.fn() };
 if (!chrome.debugger) chrome.debugger = { attach: vi.fn(), detach: vi.fn(), sendCommand: vi.fn() };
-if (!chrome.tabs) chrome.tabs = { onRemoved: { addListener: vi.fn() }, query: vi.fn(), get: vi.fn(), create: vi.fn() };
+if (!chrome.tabs) chrome.tabs = { onRemoved: { addListener: vi.fn() }, query: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn() };
 if (!chrome.runtime) chrome.runtime = { onMessage: { addListener: vi.fn() }, sendMessage: vi.fn() };
 if (!chrome.storage) chrome.storage = { local: { get: vi.fn(), set: vi.fn(), remove: vi.fn() } };

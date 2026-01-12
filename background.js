@@ -161,6 +161,52 @@ async function handlePrintToPDF(targetTabId, sidepanelTabId, sendResponse) {
 
     debugTarget = { tabId: tab.id };
 
+    let pdfData;
+    let pageText;
+    let usedTab = tab;
+    let tempTabId = null;
+
+    // Special handling for PDF files to get original bytes instead of a "PDF of the viewer"
+    // Similar to Gmail handling, we use custom logic for specific content types.
+    // We do this BEFORE attaching the debugger to avoid the blue bar for direct PDFs.
+    const isPdfUrl = tab.url.toLowerCase().endsWith('.pdf') || 
+                     tab.url.toLowerCase().includes('.pdf?') ||
+                     tab.url.toLowerCase().includes('/pdf/');
+
+    if (isPdfUrl) {
+      try {
+        console.log('[ChatGPT Sidebar] Detected PDF URL, attempting direct fetch:', tab.url);
+        const response = await fetch(tab.url);
+        if (response.ok) {
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.toLowerCase().includes('application/pdf')) {
+            const arrayBuffer = await response.arrayBuffer();
+            const bytes = new Uint8Array(arrayBuffer);
+            let binary = '';
+            for (let i = 0; i < bytes.byteLength; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            pdfData = btoa(binary);
+            // For PDFs, we use the URL as a fingerprint since text extraction is hard
+            pageText = tab.url;
+            console.log('[ChatGPT Sidebar] Successfully fetched original PDF bytes');
+            
+            // Skip debugger attachment and Gmail logic if we already have the PDF
+            sendResponse({
+              pdfData: pdfData,
+              pageText: pageText,
+              filename: sanitizeFilename(tab.title),
+              title: tab.title,
+              url: tab.url,
+            });
+            return;
+          }
+        }
+      } catch (pdfErr) {
+        console.error('[ChatGPT Sidebar] Failed to fetch PDF directly, falling back to printToPDF:', pdfErr);
+      }
+    }
+
     // Attach debugger (persistently to avoid flickering)
     try {
       await attachDebugger(tab.id, sidepanelTabId);
@@ -174,11 +220,6 @@ async function handlePrintToPDF(targetTabId, sidepanelTabId, sendResponse) {
       }
       throw attachErr;
     }
-
-    let pdfData;
-    let pageText;
-    let usedTab = tab;
-    let tempTabId = null;
 
     // Special handling for Gmail to get "Print all" view
     if (tab.url.includes('mail.google.com')) {

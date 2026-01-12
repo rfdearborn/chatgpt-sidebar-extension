@@ -35,6 +35,10 @@ Maintain this pattern when adding new testable functions.
 - **Print View Hijacking**: For Gmail, the extension navigates a hidden temporary tab to Gmail's native print view (`view=pt`). This is the only reliable way to get high-fidelity email content.
 - **Dialog Blocking**: The background script must inject a script to block `window.print()` in the temporary tab to prevent the browser from hanging.
 
+### PDFs
+- **Direct Byte Fetching**: For tabs displaying PDFs (detected via URL), the extension attempts to `fetch` the original document bytes directly. This provides the highest fidelity and avoids triggering the "browser is being debugged" notification.
+- **Fallback Mechanism**: If direct fetch fails or the content-type is mismatched, it falls back to standard `Page.printToPDF` via the Debugger API.
+
 ## Environment Constraints
 
 - **Manifest V3**: The extension strictly follows MV3 patterns (Service Workers, Declarative Net Request).

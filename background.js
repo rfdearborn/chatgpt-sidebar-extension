@@ -227,19 +227,81 @@ async function handlePrintToPDF(targetTabId, sidepanelTabId, sendResponse) {
         const evalResult = await chrome.debugger.sendCommand(debugTarget, 'Runtime.evaluate', {
           expression: `(() => {
             const getThreadId = () => {
-              // 1. Check for the specific attribute Gmail uses for thread ID
-              const el = document.querySelector('[data-legacy-thread-id]');
-              if (el) return el.getAttribute('data-legacy-thread-id');
-              
-              // 2. Fallback to parsing the URL hash for a 16-char hex string
+              // 1. URL parameters are highest signal for popouts and direct links
+              const urlParams = new URLSearchParams(window.location.search);
+              const thParams = ['th', 'threadId', 'id', 'mid', 'message_id'];
+              for (const p of thParams) {
+                const val = urlParams.get(p);
+                if (val && /^[0-9a-f]{16}$/i.test(val)) return val;
+              }
+
+              // 2. URL hash is extremely reliable for the main Gmail UI when viewing a thread
+              // Example: #inbox/abcdef1234567890 or #search/term/abcdef1234567890
               const hash = window.location.hash;
-              const hexMatch = hash.match(/[#\/]([0-9a-f]{16})/i);
+              const hexMatch = hash.match(/[#\\/]([0-9a-f]{16})/i);
               if (hexMatch) return hexMatch[1];
+
+              // 3. DOM check - ONLY if we appear to be in a message view to avoid grabbing inbox rows
+              // We check for elements that usually only exist when a message is actually open
+              const isMessageView = !!document.querySelector('[role="main"] [role="listitem"], [role="main"] .h7, [role="main"] .if');
+              if (isMessageView) {
+                // Try to find the thread ID in the main content area
+                const mainEl = document.querySelector('[role="main"]');
+                if (mainEl) {
+                  const el = mainEl.querySelector('[data-legacy-thread-id], [data-thread-id]');
+                  if (el) {
+                    const val = el.getAttribute('data-legacy-thread-id') || el.getAttribute('data-thread-id');
+                    if (val && /^[0-9a-f]{16}$/i.test(val)) return val;
+                  }
+                }
+              }
+
+              // 4. Last resort scans for popouts where IDs might be in script blocks
+              const html = document.documentElement.innerHTML;
+              const thMatch = html.match(/["']?threadId["']?\\s*[:=]\\s*["']([0-9a-f]{16})["']/) ||
+                              html.match(/["']?th["']?\\s*[:=]\\s*["']([0-9a-f]{16})["']/) ||
+                              html.match(/legacy_thread_id["']?\\s*[:=]\\s*["']([0-9a-f]{16})["']/);
+              if (thMatch) return thMatch[1];
 
               return null;
             };
 
-            const ik = window._ik || (window.GLOBALS && window.GLOBALS[9]);
+            const getIk = () => {
+              // 1. Check common global variables
+              const ik = window._ik || (window.GLOBALS && window.GLOBALS[9]);
+              if (ik) return ik;
+
+              // 2. Check window.opener if available
+              try {
+                if (window.opener && window.opener._ik) return window.opener._ik;
+                if (window.opener && window.opener.GLOBALS && window.opener.GLOBALS[9]) return window.opener.GLOBALS[9];
+              } catch (e) {}
+
+              // 3. Check URL parameters
+              const urlParams = new URLSearchParams(window.location.search);
+              const ikParams = ['ik', 'ver', 'at'];
+              for (const p of ikParams) {
+                const val = urlParams.get(p);
+                if (val && /^[a-z0-9]{10,15}$/i.test(val)) return val;
+              }
+
+              // 4. Search all scripts for "ik"
+              const scripts = document.getElementsByTagName('script');
+              for (let i = 0; i < scripts.length; i++) {
+                const text = scripts[i].textContent;
+                const match = text.match(/["']?ik["']?\\s*[:=]\\s*["']([^"']+)["']/) || 
+                             text.match(/_ik\\s*=\\s*["']([^"']+)["']/);
+                if (match) return match[1];
+              }
+
+              return null;
+            };
+
+            // 5. Try to find a direct print link in the DOM if possible
+            const printLink = document.querySelector('a[href*="view=pt"]');
+            if (printLink && printLink.href) return printLink.href;
+
+            const ik = getIk();
             const th = getThreadId();
             
             if (ik && th) {

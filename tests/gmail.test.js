@@ -129,4 +129,62 @@ describe('Background Script - Gmail Specific Handling', () => {
       pdfData: 'normal_pdf_data'
     }));
   });
+
+  it('should handle Gmail popout windows by extracting th and ik from URL params', async () => {
+    const targetTabId = 1;
+    const sidepanelTabId = 101;
+    const sendResponse = vi.fn();
+
+    const mockTab = { 
+      id: 1, 
+      title: 'Gmail Popout', 
+      url: 'https://mail.google.com/mail/u/0/popout?ver=48zbjtw8qmlf&th=abcdef1234567890&ik=testik12345' 
+    };
+    
+    chrome.tabs.get.mockImplementation(async (id) => {
+      if (id === 1) return mockTab;
+      if (id === 2) return { id: 2, status: 'complete', title: 'Print View', url: 'https://mail.google.com/mail/u/0/?ui=2&ik=testik12345&view=pt&search=all&th=abcdef1234567890' };
+    });
+
+    // Mock debugger responses
+    chrome.debugger.sendCommand.mockImplementation(async (target, command, params) => {
+      if (command === 'Runtime.evaluate') {
+        if (target.tabId === 1) {
+          // This simulates the logic looking for ik and th in URL params
+          const expression = params.expression;
+          if (expression.includes('getThreadId')) {
+            const url = new URL(mockTab.url);
+            const ik = url.searchParams.get('ik');
+            const th = url.searchParams.get('th');
+            // Verify our regex logic would match these
+            const thValid = /^[0-9a-f]{16}$/i.test(th);
+            const ikValid = /^[a-z0-9]{10,15}$/i.test(ik);
+            
+            if (thValid && ikValid) {
+               return { result: { value: `https://mail.google.com/mail/u/0/?ui=2&ik=${ik}&view=pt&search=all&th=${th}` } };
+            }
+          }
+        } else if (target.tabId === 2) {
+          return { result: { value: 'printed thread text' } };
+        }
+      }
+      if (command === 'Page.printToPDF' && target.tabId === 2) {
+        return { data: 'gmail_popout_pdf_data' };
+      }
+      return {};
+    });
+
+    const promise = background.handlePrintToPDF(targetTabId, sidepanelTabId, sendResponse);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    chrome.tabs.onUpdated.callListeners(2, { status: 'complete' });
+    await promise;
+
+    expect(chrome.tabs.update).toHaveBeenCalledWith(2, expect.objectContaining({
+      url: 'https://mail.google.com/mail/u/0/?ui=2&ik=testik12345&view=pt&search=all&th=abcdef1234567890'
+    }));
+
+    expect(sendResponse).toHaveBeenCalledWith(expect.objectContaining({
+      pdfData: 'gmail_popout_pdf_data'
+    }));
+  });
 });

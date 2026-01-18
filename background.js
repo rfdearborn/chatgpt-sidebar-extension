@@ -43,8 +43,21 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       chrome.debugger.detach({ tabId: targetTabId }).catch(() => {});
     }
   }
-  // Clean up stored URL and pending PDF for this tab
-  chrome.storage.local.remove([`lastChatUrl_${tabId}`, `pendingPDF_${tabId}`, `autoAttachEnabled_${tabId}`]);
+  // Clean up stored URLs, pending PDFs, and settings for this tab (all models)
+  chrome.storage.local.remove([
+    // ChatGPT
+    `lastChatUrl_chatgpt_${tabId}`,
+    `pendingPDF_chatgpt_${tabId}`,
+    // Claude
+    `lastChatUrl_claude_${tabId}`,
+    `pendingPDF_claude_${tabId}`,
+    // Gemini
+    `lastChatUrl_gemini_${tabId}`,
+    `pendingPDF_gemini_${tabId}`,
+    // Shared settings
+    `autoAttachEnabled_${tabId}`,
+    `selectedModel_${tabId}`
+  ]);
 });
 
 // Listen for messages
@@ -435,19 +448,20 @@ async function handlePrintToPDF(targetTabId, sidepanelTabId, sendResponse) {
   }
 }
 
-// Store PDF data for content script to pick up (per-tab to avoid cross-contamination)
+// Store PDF data for content script to pick up (per-tab, per-model to avoid cross-contamination)
 async function forwardDropPDF(request, sender, sendResponse) {
   try {
     let tabId = request.tabId;
+    const model = request.model || 'chatgpt';
 
     if (!tabId) {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       tabId = tabs[0]?.id;
     }
 
-    // Use per-tab storage key to prevent PDFs from going to wrong tabs
+    // Use per-tab, per-model storage key to prevent PDFs from going to wrong tabs/models
     await chrome.storage.local.set({
-      [`pendingPDF_${tabId}`]: {
+      [`pendingPDF_${model}_${tabId}`]: {
         pdfData: request.pdfData,
         filename: request.filename,
         timestamp: Date.now()

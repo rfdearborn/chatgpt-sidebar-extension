@@ -1,10 +1,9 @@
-// Content script that runs on chatgpt.com
+// Content script that runs on claude.ai
 // Receives PDF data via storage and simulates a file drop
 
-const MODEL_ID = 'chatgpt';
+const MODEL_ID = 'claude';
 
 // Track the tab ID this content script is associated with
-// Read from URL parameter set by sidepanel to avoid cross-tab contamination
 let currentTabId = null;
 
 // Initialize tab ID from URL parameter
@@ -13,7 +12,7 @@ function initTabId() {
   const tabIdParam = url.searchParams.get('__sidebarTabId');
   if (tabIdParam) {
     currentTabId = parseInt(tabIdParam, 10);
-    console.log('[AI Sidebar] ChatGPT: Tab ID from URL param:', currentTabId);
+    console.log('[AI Sidebar] Claude: Tab ID from URL param:', currentTabId);
 
     // Check for any pending PDF for this specific tab
     checkPendingPDF();
@@ -32,16 +31,16 @@ function setupPDFListener() {
     const storageKey = `pendingPDF_${MODEL_ID}_${currentTabId}`;
     if (areaName === 'local' && changes[storageKey]?.newValue) {
       const { pdfData, filename } = changes[storageKey].newValue;
-      console.log('[AI Sidebar] ChatGPT: Received PDF via storage:', filename);
+      console.log('[AI Sidebar] Claude: Received PDF via storage:', filename);
 
       handlePDFDrop(pdfData, filename)
         .then(() => {
           // Clear the pending PDF for this tab
           chrome.storage.local.remove(storageKey);
-          console.log('[AI Sidebar] ChatGPT: PDF drop completed');
+          console.log('[AI Sidebar] Claude: PDF drop completed');
         })
         .catch((err) => {
-          console.error('[AI Sidebar] ChatGPT: PDF drop failed:', err);
+          console.error('[AI Sidebar] Claude: PDF drop failed:', err);
         });
     }
   });
@@ -55,10 +54,10 @@ function checkPendingPDF() {
       const { pdfData, filename, timestamp } = result[storageKey];
       // Only process if recent (within last 10 seconds)
       if (Date.now() - timestamp < 10000) {
-        console.log('[AI Sidebar] ChatGPT: Found pending PDF on load:', filename);
+        console.log('[AI Sidebar] Claude: Found pending PDF on load:', filename);
         handlePDFDrop(pdfData, filename)
           .then(() => chrome.storage.local.remove(storageKey))
-          .catch((err) => console.error('[AI Sidebar] ChatGPT: PDF drop failed:', err));
+          .catch((err) => console.error('[AI Sidebar] Claude: PDF drop failed:', err));
       } else {
         // Clear stale PDF
         chrome.storage.local.remove(storageKey);
@@ -83,10 +82,10 @@ async function handlePDFDrop(base64Data, filename) {
   // Find the drop target
   const dropTarget = findDropTarget();
   if (!dropTarget) {
-    throw new Error('Could not find drop target on ChatGPT page');
+    throw new Error('Could not find drop target on Claude page');
   }
 
-  console.log('[AI Sidebar] ChatGPT: Dropping PDF on:', dropTarget.tagName, dropTarget.className);
+  console.log('[AI Sidebar] Claude: Dropping PDF on:', dropTarget.tagName, dropTarget.className);
 
   // Create DataTransfer with the file
   const dataTransfer = new DataTransfer();
@@ -107,15 +106,16 @@ async function handlePDFDrop(base64Data, filename) {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
 
-  console.log('[AI Sidebar] ChatGPT: PDF drop simulated successfully');
+  console.log('[AI Sidebar] Claude: PDF drop simulated successfully');
 }
 
 function findDropTarget() {
-  // Try various selectors that ChatGPT might use
+  // Try various selectors that Claude might use
   const selectors = [
-    // The composer/input area
-    '#prompt-textarea',
-    '[data-testid="composer"]',
+    // Claude's input area selectors
+    '[data-placeholder="Reply to Claude…"]',
+    '[contenteditable="true"]',
+    'div[contenteditable]',
     // Main chat form
     'form',
     // Main content area
@@ -127,7 +127,7 @@ function findDropTarget() {
   for (const selector of selectors) {
     const el = document.querySelector(selector);
     if (el) {
-      console.log('[AI Sidebar] ChatGPT: Found drop target:', selector);
+      console.log('[AI Sidebar] Claude: Found drop target:', selector);
       return el;
     }
   }
@@ -137,16 +137,16 @@ function findDropTarget() {
 
 // Save current URL to storage so we can restore it later (per tab)
 function saveCurrentUrl() {
-  if (!currentTabId) return; // Don't save if we don't know which tab we're associated with
+  if (!currentTabId) return;
 
   // Remove the __sidebarTabId param before saving the URL
   const url = new URL(window.location.href);
   url.searchParams.delete('__sidebarTabId');
   const cleanUrl = url.toString();
 
-  if (cleanUrl && cleanUrl.startsWith('https://chatgpt.com')) {
+  if (cleanUrl && cleanUrl.startsWith('https://claude.ai')) {
     chrome.storage.local.set({ [`lastChatUrl_${MODEL_ID}_${currentTabId}`]: cleanUrl });
-    // Notify sidepanel of current URL so it can open the right tab
+    // Notify sidepanel of current URL
     chrome.runtime.sendMessage({
       action: 'chatUrlChanged',
       url: cleanUrl,
@@ -156,7 +156,7 @@ function saveCurrentUrl() {
   }
 }
 
-// Watch for URL changes (pushState/popState) - only if we have a tab ID
+// Watch for URL changes (pushState/popState)
 let lastUrl = window.location.href;
 function setupUrlObserver() {
   if (!currentTabId) return;
@@ -177,26 +177,25 @@ function setupUrlObserver() {
 }
 
 // --- Conversation Turn Detection ---
-// Detect when a user sends a message to ChatGPT
 function setupTurnDetection() {
-  console.log('[AI Sidebar] ChatGPT: Setting up turn detection...');
+  console.log('[AI Sidebar] Claude: Setting up turn detection...');
 
-  // 1. Listen for clicks on the send button
+  // Listen for clicks on send buttons
   document.addEventListener('click', (e) => {
-    const sendButton = e.target.closest('[data-testid="send-button"]') ||
-                       e.target.closest('button[aria-label="Send prompt"]');
+    const sendButton = e.target.closest('button[aria-label="Send Message"]') ||
+                       e.target.closest('button[type="submit"]');
     if (sendButton) {
-      console.log('[AI Sidebar] ChatGPT: Send button clicked');
+      console.log('[AI Sidebar] Claude: Send button clicked');
       notifyTurn();
     }
   }, true);
 
-  // 2. Listen for Enter key in the textarea
+  // Listen for Enter key in the input area
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
-      const textarea = e.target.closest('#prompt-textarea');
-      if (textarea) {
-        console.log('[AI Sidebar] ChatGPT: Enter pressed in textarea');
+      const inputArea = e.target.closest('[contenteditable="true"]');
+      if (inputArea) {
+        console.log('[AI Sidebar] Claude: Enter pressed in input');
         notifyTurn();
       }
     }
@@ -210,7 +209,7 @@ function notifyTurn() {
   if (now - lastNotifyTime < 2000) return;
   lastNotifyTime = now;
 
-  console.log('[AI Sidebar] ChatGPT: Notifying turn detected');
+  console.log('[AI Sidebar] Claude: Notifying turn detected');
   chrome.runtime.sendMessage({
     action: 'conversationTurnDetected',
     tabId: currentTabId,
@@ -225,7 +224,7 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
   window.addEventListener('DOMContentLoaded', setupTurnDetection);
 }
 
-console.log('[AI Sidebar] ChatGPT content script loaded');
+console.log('[AI Sidebar] Claude content script loaded');
 
 // Export for testing
 if (typeof module !== 'undefined') {
@@ -234,7 +233,6 @@ if (typeof module !== 'undefined') {
     findDropTarget,
     notifyTurn,
     MODEL_ID,
-    // Expose for test manipulation
     setCurrentTabId: (id) => { currentTabId = id; },
     getLastNotifyTime: () => lastNotifyTime,
     setLastNotifyTime: (time) => { lastNotifyTime = time; }

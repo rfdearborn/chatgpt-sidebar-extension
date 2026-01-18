@@ -3,12 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ChatGPT Sidebar</title>
+  <title>AI Sidebar</title>
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
   <div id="app">
     <div id="toolbar">
+      <select id="modelSelect" title="Select AI model">
+        <option value="chatgpt">ChatGPT</option>
+        <option value="claude">Claude</option>
+        <option value="gemini">Gemini</option>
+      </select>
+      <div class="divider">|</div>
       <span class="toolbar-label">Share page:</span>
       <div class="toggle-container" title="Automatically attach page on conversation turns or when content changes">
         <label class="switch">
@@ -33,9 +39,9 @@
       <span id="status-message"></span>
       <button id="status-close">×</button>
     </div>
-    <div id="chatgpt-container">
+    <div id="ai-container">
       <iframe
-        id="chatgpt-frame"
+        id="ai-frame"
         src="https://chatgpt.com/"
         allow="clipboard-write; clipboard-read"
       ></iframe>
